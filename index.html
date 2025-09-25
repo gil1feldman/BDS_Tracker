@@ -58,7 +58,6 @@
 </div>
 
 <div class="add-button-container">
-  <!-- עדכן אם תרצה לקשר לעמוד ההזנה שלך -->
  <a href="https://www.hamatzav-hanatun.co.il/%D7%9E%D7%AA%D7%A2%D7%93%D7%99%D7%9D-%D7%99%D7%93%D7%99%D7%A2%D7%95%D7%AA-%D7%A2%D7%9C-%D7%97%D7%A8%D7%9E%D7%95%D7%AA" target="_blank" rel="noopener">➕ הוסף ידיעה</a>
 </div>
 
@@ -94,15 +93,76 @@
     catch { return 'לא ידוע'; }
   }
 
+  // ✅ פרסור עמיד וגמיש עבור InfoDate ו־Timestamp
   function parseKnownDate(infoDateStr, timestampStr) {
-    if (infoDateStr && /^\d{4}-\d{2}-\d{2}$/.test(infoDateStr.trim())) {
-      const d = new Date(infoDateStr.trim());
-      if (!isNaN(d)) return d;
+    const clean = s => (typeof s === 'string' ? s.trim() : '');
+
+    // עזר: יוצר תאריך בטוח מ־YYYY-MM-DD (כשדה תאריך בלבד, מקומי, בלי הזחות UTC)
+    const fromYMD = (y, m, d) => {
+      const year = Number(y), month = Number(m), day = Number(d);
+      const dt = new Date(year, month - 1, day, 0, 0, 0, 0);
+      return isNaN(dt) ? null : dt;
+    };
+
+    // 1) קודם InfoDate
+    let s = clean(infoDateStr);
+    if (s) {
+      // DD/MM/YYYY או DD-MM-YYYY או DD.MM.YYYY
+      let m = s.match(/^(\d{2})[\/.-](\d{2})[\/.-](\d{4})$/);
+      if (m) {
+        const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+        if (!isNaN(dt)) return dt;
+      }
+      // YYYY-MM-DD או YYYY/MM/DD או YYYY.MM.DD
+      m = s.match(/^(\d{4})[\/.-](\d{2})[\/.-](\d{2})$/);
+      if (m) {
+        const dt = fromYMD(m[1], m[2], m[3]);
+        if (dt) return dt;
+      }
+      // ISO מלא או כמעט מלא (ננסה ישירות)
+      const tryISO = new Date(s);
+      if (!isNaN(tryISO)) return tryISO;
     }
-    if (timestampStr && /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(timestampStr.trim())) {
-      const d = new Date(timestampStr.replace(' ', 'T') + 'Z'); // שמר סדר
-      if (!isNaN(d)) return d;
+
+    // 2) אם אין InfoDate תקין ‐ ננסה Timestamp
+    s = clean(timestampStr);
+    if (s) {
+      // אם יש רווח בין תאריך לשעה, נהפוך ל־T (לא נוסיף Z!)
+      const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+
+      // נסיון ראשון: לתת ל־Date לפרסר לבד (כולל אזורי זמן אם קיימים, כולל ISO)
+      let dt = new Date(normalized);
+      if (!isNaN(dt)) return dt;
+
+      // DD/MM/YYYY HH:MM[:SS]
+      let m = s.match(/^(\d{2})[\/.-](\d{2})[\/.-](\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (m) {
+        dt = new Date(
+          Number(m[3]),
+          Number(m[2]) - 1,
+          Number(m[1]),
+          Number(m[4]),
+          Number(m[5]),
+          Number(m[6] || 0)
+        );
+        if (!isNaN(dt)) return dt;
+      }
+
+      // YYYY-MM-DD HH:MM[:SS] (ללא אזור זמן) ‐ נתייחס כזמן מקומי
+      m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (m) {
+        dt = new Date(
+          Number(m[1]),
+          Number(m[2]) - 1,
+          Number(m[3]),
+          Number(m[4]),
+          Number(m[5]),
+          Number(m[6] || 0)
+        );
+        if (!isNaN(dt)) return dt;
+      }
     }
+
     return null;
   }
 
