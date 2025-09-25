@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>טבלת חרמות – פרסומים</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    body { font-family: 'Alef', Arial, sans-serif; background: #f9f9f9; padding: 20px; }
+    h2 { color: #1a3969; font-size: 2em; text-align: center; margin-bottom: 20px; }
+    .filter-container { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; margin-bottom: 20px; }
+    .filter-container label { display: flex; align-items: center; gap: 6px; font-weight: bold; color: #1a3969; }
+    select { font-size: 1em; padding: 6px 12px; border-radius: 6px; border: 1px solid #ccc; }
+    .add-button-container { text-align: left; margin-bottom: 10px; }
+    .add-button-container a { background-color: #e0ecf8; color: #1a3969; padding: 6px 12px; font-size: 0.9em; border-radius: 6px; text-decoration: none; border: 1px solid #b6d0ea; }
+    .add-button-container a:hover { background-color: #d2e4f5; }
+    table { width: 100%; border-collapse: collapse; background: white; direction: rtl; border-radius: 6px; overflow: hidden; }
+    th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+    th { background: #1a3969; color: white; }
+    tr.impact-very-weak { background-color: #8B0000; color: white; }   /* מחלישה מאוד */
+    tr.impact-weak { background-color: #FF9999; color: black; }       /* מחלישה קצת */
+    tr.impact-strong { background-color: #99FF99; color: black; }     /* מחזקת קצת */
+    tr.impact-very-strong { background-color: #006400; color: white; }/* מחזקת מאוד */
+    a.date-link { color: #00b2e3; text-decoration: none; font-weight: bold; }
+    a.date-link:hover { text-decoration: underline; }
+    .error { color: #b00020; text-align: center; }
+  </style>
+</head>
+<body>
+
+<h2>טבלת פרסומים על חרמות נגד מדינת ישראל</h2>
+
+<div class="filter-container">
+  <label>סנן לפי נושא:
+    <select id="topic-filter">
+      <option value="all">הצג הכל</option>
+    </select>
+  </label>
+
+  <label>סנן לפי השפעה:
+    <select id="impact-filter">
+      <option value="all">הצג הכל</option>
+    </select>
+  </label>
+
+  <label>סנן לפי מקור:
+    <select id="source-filter">
+      <option value="all">הצג הכל</option>
+    </select>
+  </label>
+
+  <label>סנן לפי תאריך:
+    <select id="date-filter">
+      <option value="all">כל התאריכים</option>
+      <option value="7">7 ימים אחרונים</option>
+      <option value="30">30 ימים אחרונים</option>
+      <option value="90">90 ימים אחרונים</option>
+    </select>
+  </label>
+</div>
+
+<div class="add-button-container">
+  <!-- עדכן לכפתור ההזנה החדש שלך -->
+  <a href="https://your-submit-page.example" target="_blank">➕ הוסף ידיעה</a>
+</div>
+
+<table id="data-table">
+  <thead>
+    <tr>
+      <th>הנושא הרלוונטי</th>
+      <th>השפעת הידיעה</th>
+      <th>הערות</th>
+      <th>מקור</th>
+      <th>תאריך</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<p id="load-error" class="error" style="display:none;"></p>
+
+<script>
+  // ===== הגדרות =====
+  // פרסום כ־CSV: קובץ → פרסום לאינטרנט → בחר את Submissions → CSV → העתק URL לכאן:
+  const SHEET_CSV_URL = 'PUT_YOUR_SUBMISSIONS_CSV_URL_HERE';
+
+  // אם אין לך כותרות בגליון, הסקריפט יזהה לפי עמדות (עמודה 0=Timestamp, 1=Topic, 2=Impact, 3=Link, 4=Submitter, 5=InfoDate, 6=Comments)
+
+  let allData = [];
+
+  const topicFilter = document.getElementById("topic-filter");
+  const impactFilter = document.getElementById("impact-filter");
+  const sourceFilter = document.getElementById("source-filter");
+  const dateFilter = document.getElementById("date-filter");
+  const loadError = document.getElementById("load-error");
+
+  // מיפוי שמות אפשריים של כותרות (עברית/אנגלית)
+  const HEADER_CANDIDATES = {
+    timestamp: ['Timestamp','תאריך הזנה','זמן','מועד הזנה'],
+    topic: ['Topic','הנושא הרלוונטי','נושא'],
+    impact: ['Impact','השפעת הידיעה','השפעה'],
+    link: ['Link','קישור לידיעה','קישור'],
+    submitter: ['Submitter','מוסיף הידיעה','ממלא','שם'],
+    infoDate: ['InfoDate','תאריך המידע','תאריך פרסום'],
+    comments: ['Comments','הערות','פרשנות']
+  };
+
+  function findHeaderKey(fields, candidates) {
+    for (const cand of candidates) {
+      const f = fields.find(x => x && x.trim().toLowerCase() === cand.trim().toLowerCase());
+      if (f) return f;
+    }
+    return null;
+  }
+
+  function extractDomain(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ''); }
+    catch { return 'לא ידוע'; }
+  }
+
+  function parseKnownDate(infoDateStr, timestampStr) {
+    // InfoDate בפורמט yyyy-MM-dd
+    if (infoDateStr && /^\d{4}-\d{2}-\d{2}$/.test(infoDateStr.trim())) {
+      const d = new Date(infoDateStr.trim());
+      if (!isNaN(d)) return d;
+    }
+    // Timestamp מהסקריפט: yyyy-MM-dd HH:mm:ss
+    if (timestampStr && /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(timestampStr.trim())) {
+      const d = new Date(timestampStr.replace(' ', 'T') + 'Z'); // נניח UTC כדי לשמור סדר
+      if (!isNaN(d)) return d;
+    }
+    return null;
+  }
+
+  function formatDate(dateObj) {
+    if (!(dateObj instanceof Date) || isNaN(dateObj)) return "אין תאריך";
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const year = dateObj.getFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  function classByImpact(impact) {
+    switch ((impact || '').trim()) {
+      case 'מחלישה מאוד': return 'impact-very-weak';
+      case 'מחלישה קצת': return 'impact-weak';
+      case 'מחזקת קצת': return 'impact-strong';
+      case 'מחזקת מאוד': return 'impact-very-strong';
+      default: return '';
+    }
+  }
+
+  function renderTable(data) {
+    const tbody = document.querySelector("#data-table tbody");
+    tbody.innerHTML = "";
+    data
+      .slice()
+      .sort((a, b) => (b.dateObj?.getTime() || 0) - (a.dateObj?.getTime() || 0))
+      .forEach(row => {
+        const tr = document.createElement("tr");
+        const cls = classByImpact(row.impact);
+        if (cls) tr.classList.add(cls);
+
+        const dateLabel = formatDate(row.dateObj);
+        const dateCell = row.link
+          ? `<a href="${row.link}" target="_blank" class="date-link">${dateLabel}</a>`
+          : dateLabel;
+
+        tr.innerHTML = `
+          <td>${row.topic || ''}</td>
+          <td>${row.impact || ''}</td>
+          <td>${row.comments || ''}</td>
+          <td>${row.sourceDomain || 'לא ידוע'}</td>
+          <td>${dateCell}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+  }
+
+  function updateFilterCounts(filteredData) {
+    const countBy = field => filteredData.reduce((acc, r) => ((acc[r[field]] = (acc[r[field]] || 0) + 1), acc), {});
+    const updateOptions = (selectEl, counts, allLabel) => {
+      Array.from(selectEl.options).forEach(opt => {
+        if (opt.value === "all") opt.textContent = allLabel;
+        else opt.textContent = `${opt.value} (${counts[opt.value] || 0})`;
+      });
+    };
+    updateOptions(topicFilter, countBy('topic'), "הצג הכל");
+    updateOptions(impactFilter, countBy('impact'), "הצג הכל");
+    updateOptions(sourceFilter, countBy('sourceDomain'), "הצג הכל");
+  }
+
+  function applyFilters() {
+    const t = topicFilter.value;
+    const i = impactFilter.value;
+    const s = sourceFilter.value;
+    const d = dateFilter.value;
+    const now = new Date();
+    const msDay = 86400000;
+
+    const filtered = allData.filter(r => {
+      const matchT = (t === 'all' || r.topic === t);
+      const matchI = (i === 'all' || r.impact === i);
+      const matchS = (s === 'all' || r.sourceDomain === s);
+      const matchD = (d === 'all') || (r.dateObj && (now - r.dateObj <= parseInt(d, 10) * msDay));
+      return matchT && matchI && matchS && matchD;
+    });
+
+    renderTable(filtered);
+    updateFilterCounts(filtered);
+  }
+
+  function buildFromHeaderRows(rows) {
+    // rows: מערך אובייקטים (עם שמות כותרות)
+    const fields = rows.meta?.fields || Object.keys(rows.data[0] || {});
+    const keyMap = {
+      timestamp: findHeaderKey(fields, HEADER_CANDIDATES.timestamp),
+      topic: findHeaderKey(fields, HEADER_CANDIDATES.topic),
+      impact: findHeaderKey(fields, HEADER_CANDIDATES.impact),
+      link: findHeaderKey(fields, HEADER_CANDIDATES.link),
+      submitter: findHeaderKey(fields, HEADER_CANDIDATES.submitter),
+      infoDate: findHeaderKey(fields, HEADER_CANDIDATES.infoDate),
+      comments: findHeaderKey(fields, HEADER_CANDIDATES.comments)
+    };
+
+    return rows.data
+      .filter(r => {
+        const linkVal = keyMap.link ? r[keyMap.link] : '';
+        return linkVal && String(linkVal).trim() !== '';
+      })
+      .map(r => {
+        const link = keyMap.link ? String(r[keyMap.link]).trim() : '';
+        const topic = keyMap.topic ? String(r[keyMap.topic] || '').trim() : '';
+        const impact = keyMap.impact ? String(r[keyMap.impact] || '').trim() : '';
+        const comments = keyMap.comments ? String(r[keyMap.comments] || '').trim() : '';
+        const infoDate = keyMap.infoDate ? String(r[keyMap.infoDate] || '').trim() : '';
+        const timestamp = keyMap.timestamp ? String(r[keyMap.timestamp] || '').trim() : '';
+        const sourceDomain = extractDomain(link);
+        const dateObj = parseKnownDate(infoDate, timestamp);
+        return { link, topic, impact, comments, sourceDomain, dateObj };
+      });
+  }
+
+  function buildFromPositionRows(rowsNoHeader) {
+    // rowsNoHeader: מערך של מערכי ערכים (בלי כותרות).
+    // מיפוי לפי סדר ההכנסה מה־Apps Script:
+    // [0] Timestamp, [1] Topic, [2] Impact, [3] Link, [4] Submitter, [5] InfoDate, [6] Comments
+    return rowsNoHeader.data
+      .filter(arr => (arr[3] || '').toString().trim() !== '')
+      .map(arr => {
+        const timestamp = (arr[0] || '').toString().trim();
+        const topic = (arr[1] || '').toString().trim();
+        const impact = (arr[2] || '').toString().trim();
+        const link = (arr[3] || '').toString().trim();
+        const infoDate = (arr[5] || '').toString().trim();
+        const comments = (arr[6] || '').toString().trim();
+        const sourceDomain = extractDomain(link);
+        const dateObj = parseKnownDate(infoDate, timestamp);
+        return { link, topic, impact, comments, sourceDomain, dateObj };
+      });
+  }
+
+  function populateFiltersFromData(data) {
+    const topics = new Set(), impacts = new Set(), sources = new Set();
+    data.forEach(r => { if (r.topic) topics.add(r.topic); if (r.impact) impacts.add(r.impact); if (r.sourceDomain) sources.add(r.sourceDomain); });
+
+    const addOpts = (selectEl, items) => {
+      // נקה קיים מלבד האפשרות הראשונה
+      selectEl.length = 1;
+      [...items].sort().forEach(v => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        selectEl.appendChild(o);
+      });
+    };
+
+    addOpts(topicFilter, topics);
+    addOpts(impactFilter, impacts);
+    addOpts(sourceFilter, sources);
+  }
+
+  function loadCSV() {
+    fetch(SHEET_CSV_URL)
+      .then(r => {
+        if (!r.ok) throw new Error('סטטוס רשת ' + r.status);
+        return r.text();
+      })
+      .then(csvText => {
+        // ניסיון 1: עם כותרות
+        let parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+        let rows = parsed.data || [];
+        if (!rows.length || (!parsed.meta || !parsed.meta.fields || parsed.meta.fields.length <= 1)) {
+          // ניסיון 2: בלי כותרות (נזהה עמדות)
+          const parsed2 = Papa.parse(csvText, { header: false, skipEmptyLines: true });
+          allData = buildFromPositionRows(parsed2);
+        } else {
+          allData = buildFromHeaderRows(parsed);
+        }
+
+        if (!allData.length) throw new Error('לא נמצאו נתונים להצגה');
+
+        populateFiltersFromData(allData);
+        renderTable(allData);
+        updateFilterCounts(allData);
+
+        topicFilter.addEventListener("change", applyFilters);
+        impactFilter.addEventListener("change", applyFilters);
+        sourceFilter.addEventListener("change", applyFilters);
+        dateFilter.addEventListener("change", applyFilters);
+      })
+      .catch(err => {
+        loadError.style.display = 'block';
+        loadError.textContent = '⚠️ שגיאה בטעינת הנתונים: ' + err.message;
+        console.error(err);
+      });
+  }
+
+  loadCSV();
+</script>
+
+</body>
+</html>
